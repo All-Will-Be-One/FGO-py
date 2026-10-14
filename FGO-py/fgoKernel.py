@@ -31,6 +31,7 @@ from fgoLogging import getLogger,logit
 from fgoMetadata import servantData,missionMat,missionTag,missionQuest
 from fgoReishift import reishift
 from fgoSchedule import ScriptStop,schedule
+from fgoSolver import cbc_solver
 logger=getLogger('Kernel')
 
 friendImg=ImageListener('fgoImage/friend/')
@@ -185,7 +186,7 @@ def weeklyMission():
     prob=pulp.LpProblem('WeeklyMission',sense=pulp.LpMinimize)
     prob+=pulp.lpDot(missionMat[0],x)
     for count in(count for target,minion,count in Detect.cache.saveWeeklyMission()if(logger.info(f'Add [{"|".join(target)}],{minion},{count}')or True if(coefficient:=sum((j for i in target for j,k in zip(missionMat,missionTag)if i in k and(minion or'从者'in k)),numpy.zeros(missionMat.shape[1]))).any()else logger.error(f'Invalid Target [{"|".join(target)}],{minion},{count}'))):prob+=pulp.lpDot(coefficient,x)>=count
-    prob.solve(pulp.PULP_CBC_CMD(msg=False))
+    prob.solve(cbc_solver(msg=False))
     logger.info(f'AP: {prob.objective.value():.0f}')
     fgoDevice.device.press('\x67')
     return[(tuple(int(i)for i in v.name.split('_')),int(v.varValue))for v in prob.variables()if v.varValue]

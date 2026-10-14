@@ -3,6 +3,6 @@ PySide6
 tqdm
 Flask
 pponnxcr
-pulp
+pulp<4
 matplotlib
 netifaces

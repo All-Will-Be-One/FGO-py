@@ -6,6 +6,13 @@ from fgoConst import KEYMAP
 from fgoLogging import getLogger
 logger=getLogger('Android')
 
+def foreground_package(activities):
+    """Prefer the resumed activity; dumpsys activity top also lists background apps."""
+    for label in ('topResumedActivity', 'mResumedActivity', 'ResumedActivity'):
+        match=re.search(r'\b'+label+r'\s*[:=][^\n]*?\s([A-Za-z0-9_.]+)/',activities)
+        if match:return match.group(1)
+    return None
+
 if adb:=shutil.which('adb'):
     logger.warning(f'Using Adb in PATH: {adb}')
     ADB.builtin_adb_path=staticmethod(lambda:adb)
@@ -17,8 +24,10 @@ class Android(Airtest):
             self.name=None
             return
         try:
-            super().__init__(serial,**{'cap_method':CAP_METHOD.JAVACAP,'host':os.environ.get('ADB_SERVER_SOCKET','tcp:localhost:5037').split(":")[1:]}|kwargs)
-            self.package=next(i for i in re.findall(r'ACTIVITY ([A-Za-z0-9_.]+)/',self.adb.shell('dumpsys activity top'))[::-1]if(lambda x:x[2]-x[0]>959 and x[3]-x[1]>539)(self.get_render_resolution(True,i)))
+            super().__init__(serial,**{'cap_method':getattr(CAP_METHOD,os.environ.get('FGO_CAP_METHOD','JAVACAP')),'host':os.environ.get('ADB_SERVER_SOCKET','tcp:localhost:5037').split(":")[1:]}|kwargs)
+            self.package=foreground_package(self.adb.shell('dumpsys activity activities'))
+            if self.package is None:
+                self.package=next(i for i in re.findall(r'ACTIVITY ([A-Za-z0-9_.]+)/',self.adb.shell('dumpsys activity top'))[::-1]if(lambda x:x[2]-x[0]>959 and x[3]-x[1]>539)(self.get_render_resolution(True,i)))
             self.adjustOffset()
             self.rotation_watcher.reg_callback(lambda _:self.adjustOffset())
         except Exception as e:
