@@ -235,7 +235,7 @@ class ClassicTurn:
             logger.warning(f'Skill {pos} {skill} Disabled')
             self.countDown[0][pos][skill]=999
         elif Detect(.7).isSkillCastFailed():
-            self.countDown[pos][skill]=1
+            self.countDown[0][pos][skill]=1
             fgoDevice.device.press('J')
         elif t:=Detect.cache.getSkillTargetCount():fgoDevice.device.perform(['3333','2244','3234'][t-1][self.getSkillInfo(pos,skill,2)],(300,))
     def castMasterSkill(self,skill):
