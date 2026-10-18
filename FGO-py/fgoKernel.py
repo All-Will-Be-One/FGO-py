@@ -381,6 +381,8 @@ class Turn:
         houguArea=houguArea if self.stage==self.stageTotal or sum(i>0 for i in self.enemy)>1 and sum(self.enemy)>12000 else[]
         houguTargeted=houguTargeted if self.stage==self.stageTotal or max(self.enemy)>23000+8000*len(houguArea)else[]
         hougu=[i+5 for i in houguSupport+houguArea+houguTargeted]
+        available=[i for i in range(5)if not sealed[i]]
+        if len(available)<3-len(hougu):raise ScriptStop('Insufficient Unsealed Cards')
         if self.stageTurn==1 or houguTargeted or self.enemy[self.target]==0:
             self.target=numpy.argmax(self.enemy)
             fgoDevice.device.perform('\x67\x68\x69\x64\x65\x66'[self.target],(500,))
@@ -389,7 +391,9 @@ class Turn:
         for _ in houguTargeted:
             self.enemy[self.target]=max(0,self.enemy[self.target]-48000)
             if any(self.enemy)and self.enemy[self.target]==0:self.target=next(i for i in range(5,-1,-1)if self.enemy[i])
-        def evaluate(card):return(lambda chainError:(lambda colorChain:(lambda firstBonus:
+        def evaluate(card):
+            if any(sealed[i]for i in card if i<5):return float('-inf')
+            return(lambda chainError:(lambda colorChain:(lambda firstBonus:
                 sum(
                     ((.3*bool(firstBonus&4)+.1*bool(firstBonus&1)+[1.,1.2,1.4][i]*[1,.8,1.1][color[j]])*(1+min(1,critical[j]+.2*bool(firstBonus&2)))+bool(colorChain==2))*resist[j]*(not sealed[j])
                     for i,j in enumerate(card)if j<5
@@ -399,8 +403,8 @@ class Turn:
                 +2.3*(colorChain==0)*len({group[i]for i in card if i<5 and np[group[i]]})
                 +3*(colorChain==1)
             )(7 if colorChain==3 else 1<<color[card[0]]))(-1 if chainError else{(0,):0,(1,):1,(2,):2,(0,1,2):3}.get(tuple(set(color[i]for i in card)),-1)))(any(sealed[i]for i in card if i<5))
-        card=list(max(permutations(range(5),3-len(hougu)),key=lambda x:evaluate(hougu+list(x))))
-        return''.join(['12345678'[i]for i in hougu+card+list({0,1,2,3,4}-set(card))])
+        card=list(max(permutations(available,3-len(hougu)),key=lambda x:evaluate(hougu+list(x))))
+        return''.join(['12345678'[i]for i in hougu+card+[i for i in available if i not in card]])
     def castServantSkill(self,pos,skill,target):
         fgoDevice.device.press(('ASD','FGH','JKL')[pos][skill])
         if Detect(.7).isSkillNone():
