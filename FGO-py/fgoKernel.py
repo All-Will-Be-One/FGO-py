@@ -472,42 +472,84 @@ class Main:
         self.appleKind=appleKind
         self.battleClass=battleClass
     @serialize(mutex)
-    def __call__(self,questIndex=0,battleTotal=None):
+    def __call__(self,questIndex=0,battleTotal=None,storyHook=None,allowQuest=True):
         self.prepare()
+        def flow(event,**details):
+            logger.info(f'Flow {event}',extra={'flow_event':dict(event=event,source='fgopy',battle_count=self.battleCount,target_battles=battleTotal,**details)})
+        def repeat(key,choice,reason,branch):
+            evidence=dict(recognizer='isBattleContinue',template='BATTLECONTINUE',branch=branch,semantic_verified=False)
+            flow('confirmation_button_matched',**evidence)
+            flow('confirmation_action',**evidence,stage='input_dispatch',choice=choice,reason=reason,game_effect='unverified')
+            try:fgoDevice.device.press(key)
+            except Exception:
+                flow('confirmation_action',**evidence,stage='delivery_unknown',choice=choice,reason=reason,game_effect='unverified')
+                raise
+            flow('confirmation_action',**evidence,stage='input_returned',choice=choice,reason=reason,game_effect='unverified')
         while True:
             self.battleProc=self.battleClass()
-            while True:
+            if storyHook:
                 if Detect(.3,.3).isMainInterface():
-                    if self.battleCount==battleTotal:return logger.info('Operation Unit Completed')
+                    if not allowQuest:raise ScriptStop('unsupported_story_battle_entry')
                     fgoDevice.device.press('84L'[questIndex])
                     questIndex=0
-                    if Detect(1.2).isBattleContinue():fgoDevice.device.press('K')
+                    if Detect(1.2).isApEmpty():
+                        flow('ap_empty_detected')
+                        flow('farm_exit',reason='ap_empty')
+                        return logger.info('Ap Empty')
+                landing=storyHook('pre',self.battleCount+1)
+                if landing in ('support','formation'):
+                    self.chooseFriend()
+                    while not Detect(0,.3).isBattleFormation():pass
+                    flow('screen_observed',scene='formation')
+                    fgoDevice.device.perform(' M ',(2000,2000,10000))
+                elif landing!='turn':raise ScriptStop('unsupported_story_pre_boundary')
+            else:
+                while True:
+                    if Detect(.3,.3).isMainInterface():
+                        if self.battleCount==battleTotal:
+                            flow('farm_exit',reason='target_reached',scene='quest')
+                            return logger.info('Operation Unit Completed')
+                        fgoDevice.device.press('84L'[questIndex])
+                        questIndex=0
+                        if Detect(1.2).isBattleContinue():repeat('K','continue','until_ap_empty' if battleTotal is None else 'target_not_reached','quest_entry')
+                        elif Detect.cache.isSkillCastFailed():
+                            fgoDevice.device.press('J')
+                            return logger.info('No Storm Pot')
+                        if Detect(.7,.3).isApEmpty():
+                            flow('ap_empty_detected')
+                            if not self.eatApple():
+                                flow('farm_exit',reason='ap_empty')
+                                return logger.info('Ap Empty')
+                        self.chooseFriend()
+                        while not Detect(0,.3).isBattleFormation():pass
+                        flow('screen_observed',scene='formation')
+                        if self.teamIndex and Detect.cache.getTeamIndex()+1!=self.teamIndex:fgoDevice.device.perform('\x70\x71\x72\x73\x74\x75\x76\x77\x78\x79\x7A\x7B\x7C\x7D\x7E'[self.teamIndex-1],(1000,))
+                        if self.autoFormation:fgoDevice.device.perform('\xDEL ',(1000,1500,1000))
+                        fgoDevice.device.perform(' M ',(2000,2000,10000))
+                        break
+                    elif Detect.cache.isBattleContinue():
+                        if self.battleCount==battleTotal:
+                            repeat('F','decline','target_reached','standalone_confirmation')
+                            flow('farm_exit',reason='target_reached')
+                            return logger.info('Operation Unit Completed')
+                        repeat('K','continue','until_ap_empty' if battleTotal is None else 'target_not_reached','standalone_confirmation')
+                        if Detect(.7,.3).isApEmpty():
+                            flow('ap_empty_detected')
+                            if not self.eatApple():
+                                flow('farm_exit',reason='ap_empty')
+                                return logger.info('Ap Empty')
+                        self.chooseFriend()
+                        schedule.sleep(6)
+                        break
                     elif Detect.cache.isSkillCastFailed():
                         fgoDevice.device.press('J')
                         return logger.info('No Storm Pot')
-                    if Detect(.7,.3).isApEmpty()and not self.eatApple():return logger.info('Ap Empty')
-                    self.chooseFriend()
-                    while not Detect(0,.3).isBattleFormation():pass
-                    if self.teamIndex and Detect.cache.getTeamIndex()+1!=self.teamIndex:fgoDevice.device.perform('\x70\x71\x72\x73\x74\x75\x76\x77\x78\x79\x7A\x7B\x7C\x7D\x7E'[self.teamIndex-1],(1000,))
-                    if self.autoFormation:fgoDevice.device.perform('\xDEL ',(1000,1500,1000))
-                    fgoDevice.device.perform(' M ',(2000,2000,10000))
-                    break
-                elif Detect.cache.isBattleContinue():
-                    if self.battleCount==battleTotal:
-                        fgoDevice.device.press('F')
-                        return logger.info('Operation Unit Completed')
-                    fgoDevice.device.press('K')
-                    if Detect(.7,.3).isApEmpty()and not self.eatApple():return logger.info('Ap Empty')
-                    self.chooseFriend()
-                    schedule.sleep(6)
-                    break
-                elif Detect.cache.isSkillCastFailed():
-                    fgoDevice.device.press('J')
-                    return logger.info('No Storm Pot')
-                elif Detect.cache.isTurnBegin():break
-                elif Detect.cache.isAddFriend():fgoDevice.device.perform('X',(300,))
-                elif Detect.cache.isSpecialDropSuspended():fgoDevice.device.perform('\x1B',(300,))
-                fgoDevice.device.press('\xBB')
+                    elif Detect.cache.isTurnBegin():
+                        flow('screen_observed',scene='turn')
+                        break
+                    elif Detect.cache.isAddFriend():fgoDevice.device.perform('X',(300,))
+                    elif Detect.cache.isSpecialDropSuspended():fgoDevice.device.perform('\x1B',(300,))
+                    fgoDevice.device.press('\xBB')
             self.battleCount+=1
             logger.info(f'Battle {self.battleCount}')
             if self.battleProc():
@@ -515,7 +557,12 @@ class Main:
                 self.battleTurn+=battleResult['turn']
                 self.battleTime+=battleResult['time']
                 self.material={i:self.material.get(i,0)+battleResult['material'].get(i,0)for i in self.material|battleResult['material']}
-                fgoDevice.device.perform(' '*10,(400,)*10)
+                if storyHook:
+                    storyHook('post',self.battleCount)
+                    if self.battleCount==battleTotal:
+                        flow('farm_exit',reason='target_reached')
+                        return logger.info('Operation Unit Completed')
+                else:fgoDevice.device.perform(' '*10,(400,)*10)
             else:
                 self.defeated+=1
                 fgoDevice.device.perform('CIK',(500,500,500))
