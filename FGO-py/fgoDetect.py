@@ -209,6 +209,53 @@ class XDetectCN(XDetectBase):
 class XDetectJP(XDetectBase):
     tmpl=IMG_JP
     ocr=OCR.JA
+    def _jpActionDisabled(self,rect):
+        # JP text evidence replaces the incompatible Chinese CHARASEALED asset.
+        # Exact text + confidence; do not loosen template thresholds or use a substring.
+        items=[(re.sub(r'\s+','',item.text),float(item.score))
+               for item in self.ocr.detect_and_ocr(self._crop(rect),drop_score=.5)]
+        if any(text=='行動不能' and score>=.9 for text,score in items):return True
+        if any('行動' in text or '不能' in text for text,score in items):return None
+        return False
+    def getActionDisabled(self):
+        if not hasattr(self,'_actionDisabled'):
+            self._actionDisabled=dict(
+                face=[self._jpActionDisabled((76+257*i,479,225+257*i,533))for i in range(5)],
+                np=[self._jpActionDisabled((366+231*i,190,515+231*i,240))for i in range(3)])
+        return self._actionDisabled
+    def isCardSealed(self):
+        return [self.getActionDisabled()['face'][i] is not False or any(self._compare(j,(44+257*i,492,68+257*i,528),.14)
+                for j in(self.tmpl.CARDSEALEDARTS,self.tmpl.CARDSEALEDQUICK,self.tmpl.CARDSEALEDBUSTER))for i in range(5)]
+    def isHouguReady(self,that=None):
+        if that is None:
+            time.sleep(.15)
+            that=type(self)()
+        return [that.getActionDisabled()['np'][i] is False
+                and not that._compare(self.tmpl.HOUGUSEALED,(313+231*i,172,515+231*i,258),.52)
+                and (numpy.mean(self._crop((144+319*i,679,156+319*i,684)))>55
+                     or numpy.mean(that._crop((144+319*i,679,156+319*i,684)))>55)for i in range(3)]
+    def getCardSelectionEvidence(self,previous=None):
+        import math
+        # Positive native successor scenes only; absence of card text is not acceptance.
+        if self.isNetworkError():return dict(kind='dialog')
+        if self.isBattleDefeated():return dict(kind='defeated')
+        if self.isBattleFinished():return dict(kind='advanced',scene='result')
+        if self.isTurnBegin():return dict(kind='advanced',scene='turn')
+        boxes=[]
+        for item in self.ocr.detect_and_ocr(self.im,drop_score=.9):
+            center=[sum(float(p[i])for p in item.box)/len(item.box)for i in (0,1)]
+            boxes.append(dict(text=item.text[:120],score=float(item.score),center=center))
+        clean=lambda text:re.sub(r'\s+','',text).lower()
+        back_text,back_score=self.ocr.ocr_single_line(self._crop((1180,669,1240,695)))
+        back_score=float(back_score)
+        back_score=back_score if math.isfinite(back_score) else None
+        back=clean(back_text)=='戻る' and back_score is not None and back_score>=.85
+        card=any(clean(b['text'])in{'arts','quick','buster','行動不能','attack'} and b['center'][1]>430 for b in boxes)
+        marked=any(clean(b['text']) in {'attack','1stattack','2ndattack','3rdattack'} and 150<b['center'][1]<575 for b in boxes)
+        return dict(kind='selecting' if back and card else 'unknown',selection_marker_visible=marked,
+                    back_label=dict(text=back_text,score=back_score),
+                    action_disabled=self.getActionDisabled(),unavailable=dict(face=self.isCardSealed(),np=[not ready for ready in (previous or self).isHouguReady(self)]),ocr_evidence=boxes[:32])
+
 class XDetectNA(XDetectBase):
     tmpl=IMG_NA
     ocr=OCR.EN

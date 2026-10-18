@@ -190,6 +190,118 @@ def weeklyMission():
     logger.info(f'AP: {prob.objective.value():.0f}')
     fgoDevice.device.press('\x67')
     return[(tuple(int(i)for i in v.name.split('_')),int(v.varValue))for v in prob.variables()if v.varValue]
+
+class CardSelectionHandoff(Exception):
+    def __init__(self,reason,observation):
+        self.reason,self.observation=reason,observation
+        super().__init__(reason)
+
+
+def executeCardSelection(candidates,on_frame=None):
+    """One planned chain, then bounded passive verification. No fallback/replay."""
+    if XDetect.region!='JP':
+        return fgoDevice.device.perform(candidates,(300,300,2300,1300,6000))
+    from uuid import uuid4
+    from pathlib import Path
+    from datetime import datetime,timezone
+    deadline=time.monotonic()+30
+    latest=None
+    previous_detection=None
+    plan=list(candidates[:3])
+    def emit(event,**fields):
+        logger.info(event,extra={'flow_event':dict(event=event,**fields)})
+    def check():
+        schedule.checkStop()
+        if time.monotonic()>=deadline:
+            raise CardSelectionHandoff('card_selection_timeout',latest)
+    def pause(seconds):
+        check()
+        schedule.sleep(min(seconds,max(0,deadline-time.monotonic())))
+        check()
+    def observe(index):
+        nonlocal latest,previous_detection
+        check()
+        started=datetime.now(timezone.utc).isoformat()
+        try:
+            current=XDetect()
+            check()
+            completed=datetime.now(timezone.utc).isoformat()
+            name='card-selection-'+uuid4().hex
+            saved=current.save(name,appendTime=False)
+            check()
+            if not saved:raise OSError('save returned false')
+        except (ScriptStop,CardSelectionHandoff):raise
+        except Exception as error:
+            raise CardSelectionHandoff('card_selection_capture_failed',latest) from error
+        metadata=dict(screenshot=str(Path(name+'.png').resolve()),frame_id=uuid4().hex,width=1280,height=720,
+                      coordinate_space='normalized_1280x720_pixels',capture_started_at=started,
+                      capture_completed_at=completed,capture_time_source='host_utc_capture_call')
+        # The worker resolves paths against this isolated job directory.
+        emit('screenshot_observed',name=name,observation=metadata)
+        latest=dict(kind='unknown',observation=metadata)
+        check()
+        try:
+            if on_frame is not None:
+                on_frame(current)
+                check()
+            latest=dict(current.getCardSelectionEvidence(previous=previous_detection),observation=metadata)
+            previous_detection=current
+        except (ScriptStop,CardSelectionHandoff):raise
+        except Exception as error:
+            latest['error']=str(error)
+            raise CardSelectionHandoff('card_selection_observation_error',latest) from error
+        emit('card_selection_observed',observation_index=index,observation=latest)
+        check()
+        return latest
+    emit('card_selection_plan',candidates=candidates,planned_keys=plan,dispatch_limit=3,
+         confirmation_observation_limit=12,local_timeout_seconds=30,game_effect='unverified')
+    try:
+        first=observe(0)
+        if first.get('selection_marker_visible'):
+            raise CardSelectionHandoff('card_selection_already_partial',latest)
+        if first['kind']=='selecting' and any(k in '678' for k in plan):
+            pause(.15)
+            first=observe('preflight_np')
+        if first['kind']!='selecting':raise CardSelectionHandoff('card_selection_not_ready',latest)
+        if first.get('selection_marker_visible'):
+            raise CardSelectionHandoff('card_selection_already_partial',latest)
+        if len(plan)!=3 or len(set(plan))!=3 or any(k not in '12345678' for k in plan):
+            raise CardSelectionHandoff('card_selection_invalid_plan',latest)
+        action=first['action_disabled']
+        if any((action['face'][int(k)-1] if k in '12345' else action['np'][int(k)-6]) is None for k in plan):
+            raise CardSelectionHandoff('card_selection_disabled_uncertain',latest)
+        disabled=first['unavailable']
+        if any(disabled['face'][int(k)-1] if k in '12345' else disabled['np'][int(k)-6] for k in plan):
+            raise CardSelectionHandoff('card_selection_disabled_plan',latest)
+        for index,(key,wait) in enumerate(zip(plan,(.3,.3,2.3))):
+            check()
+            emit('card_selection_dispatch',stage='input_dispatch',index=index,key=key,game_effect='unverified')
+            try:fgoDevice.device.press(key)
+            except ScriptStop:raise
+            except Exception as error:
+                emit('card_selection_dispatch',stage='delivery_unknown',index=index,key=key,error=str(error),game_effect='unverified')
+                # Never resend; attempt one passive evidence capture while budget permits.
+                try:observe(1)
+                except CardSelectionHandoff:pass
+                raise CardSelectionHandoff('card_selection_delivery_unknown',latest) from error
+            check()
+            emit('card_selection_dispatch',stage='input_returned',index=index,key=key,game_effect='unverified')
+            pause(wait)
+        for index in range(1,13):
+            current=observe(index)
+            if current['kind']=='advanced':
+                emit('card_selection_confirmed',evidence='observed_successor_scene',scene=current['scene'],
+                     individual_cards_verified=False,observation=current['observation'])
+                return
+            if current['kind']=='defeated':raise CardSelectionHandoff('card_selection_defeated_screen',latest)
+            if index<12:
+                check()
+                pause(.5)
+        raise CardSelectionHandoff('card_selection_incomplete' if latest['kind']=='selecting' else 'card_selection_unconfirmed',latest)
+    except CardSelectionHandoff as error:
+        emit('card_selection_handoff',reason=error.reason,observation=error.observation)
+        raise
+
 class ClassicTurn:
     skillInfo=[[[0,0,0,7],[0,0,0,7],[0,0,0,7]],[[0,0,0,7],[0,0,0,7],[0,0,0,7]],[[0,0,0,7],[0,0,0,7],[0,0,0,7]],[[0,0,0,7],[0,0,0,7],[0,0,0,7]],[[0,0,0,7],[0,0,0,7],[0,0,0,7]],[[0,0,0,7],[0,0,0,7],[0,0,0,7]]]
     houguInfo=[[1,7],[1,7],[1,7],[1,7],[1,7],[1,7]]
@@ -216,7 +328,7 @@ class ClassicTurn:
         if self.stageTurn==1:Detect.cache.setupEnemyGird()
         self.dispatchSkill()
         fgoDevice.device.perform(' ',(2100,))
-        fgoDevice.device.perform(self.selectCard(),(300,300,2300,1300,6000))
+        executeCardSelection(self.selectCard(),getattr(self,'cardSelectionObserver',None))
     def dispatchSkill(self):
         self.countDown=[[[max(0,j-1)for j in i]for i in self.countDown[0]],[max(0,i-1)for i in self.countDown[1]]]
         while(s:=[(self.getSkillInfo(i,j,3),0,(i,j))for i in range(3)if self.servant[i]<6 for j in range(3)if self.countDown[0][i][j]==0 and(t:=self.getSkillInfo(i,j,0))and min(t,self.stageTotal)<<8|self.getSkillInfo(i,j,1)<=self.stage<<8|self.stageTurn and Detect.cache.isSkillReady(i,j)]+[(self.masterSkill[i][-1],1,(i,))for i in range(3)if self.countDown[1][i]==0 and self.masterSkill[i][0]and min(self.masterSkill[i][0],self.stageTotal)<<8|self.masterSkill[i][1]<=self.stage<<8|self.stageTurn]):
@@ -272,7 +384,7 @@ class Turn:
         self.enemy=[Detect.cache.getEnemyHp(i)for i in range(6)]
         self.dispatchSkill()
         fgoDevice.device.perform(' ',(2100,))
-        fgoDevice.device.perform(self.selectCard(),(300,300,2300,1300,6000))
+        executeCardSelection(self.selectCard(),getattr(self,'cardSelectionObserver',None))
     def dispatchSkill(self):
         self.countDown=[[[max(0,j-1)for j in i]for i in self.countDown[0]],[max(0,i-1)for i in self.countDown[1]]]
         while skill:=[(0,i,j)for i in range(3)for j in range(3)if not self.countDown[0][i][j]and self.servant[i][0]and self.servant[i][6][j][0]and Detect.cache.isSkillReady(i,j)]: # +[(1,i)for i in range(3)if self.countDown[1][i]==0]:
@@ -430,6 +542,10 @@ class Battle:
         self.turn=0
         self.turnProc=turnClass()
         self.rainbowBox=False
+        self.turnProc.cardSelectionObserver=self.observeCardSelection
+    def observeCardSelection(self,frame):
+        # Preserve the native one-shot signal across passive confirmation captures.
+        if not frame.isTurnBegin() and not frame.isSpecialDropSuspended() and not self.rainbowBox and frame.isSpecialDropRainbowBox():self.rainbowBox=True
     def __call__(self):
         self.start=time.time()
         self.material={}
