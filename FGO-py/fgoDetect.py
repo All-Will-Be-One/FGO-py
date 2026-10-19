@@ -234,6 +234,21 @@ class XDetectJP(XDetectBase):
                 and not that._compare(self.tmpl.HOUGUSEALED,(313+231*i,172,515+231*i,258),.52)
                 and (numpy.mean(self._crop((144+319*i,679,156+319*i,684)))>55
                      or numpy.mean(that._crop((144+319*i,679,156+319*i,684)))>55)for i in range(3)]
+    def getCardLayoutEvidence(self):
+        """Bounded same-frame glyph checks; never call the retrying getCardColor."""
+        import math
+        if self.im.shape[:2]!=(720,1280):return dict(complete=False,slots=[],threshold=.2)
+        slots=[]
+        for i in range(5):
+            rect=(80+257*i,537,131+257*i,581)
+            scores=[float(self._loc(template,rect)[0])for template in (self.tmpl.ARTS,self.tmpl.QUICK,self.tmpl.BUSTER)]
+            finite=[(score,index)for index,score in enumerate(scores)if math.isfinite(score)]
+            best,index=min(finite)if finite else (None,None)
+            matched=best is not None and best<.2
+            slots.append(dict(slot=i+1,rect=list(rect),type=('arts','quick','buster')[index]if matched else None,
+                              error=best,scores=[score if math.isfinite(score)else None for score in scores]))
+        return dict(complete=all(slot['type']is not None for slot in slots),slots=slots,threshold=.2)
+
     def getCardSelectionEvidence(self,previous=None):
         import math
         # Positive native successor scenes only; absence of card text is not acceptance.
@@ -250,9 +265,10 @@ class XDetectJP(XDetectBase):
         back_score=float(back_score)
         back_score=back_score if math.isfinite(back_score) else None
         back=clean(back_text)=='戻る' and back_score is not None and back_score>=.85
-        card=any(clean(b['text'])in{'arts','quick','buster','行動不能','attack'} and b['center'][1]>430 for b in boxes)
         marked=any(clean(b['text']) in {'attack','1stattack','2ndattack','3rdattack'} and 150<b['center'][1]<575 for b in boxes)
-        return dict(kind='selecting' if back and card else 'unknown',selection_marker_visible=marked,
+        layout=self.getCardLayoutEvidence()
+        # A partial hand is evidence to stop, never permission to dispatch.
+        return dict(kind='selecting' if back and (layout['complete'] or marked) else 'unknown',selection_marker_visible=marked,card_layout=layout,
                     back_label=dict(text=back_text,score=back_score),
                     action_disabled=self.getActionDisabled(),unavailable=dict(face=self.isCardSealed(),np=[not ready for ready in (previous or self).isHouguReady(self)]),ocr_evidence=boxes[:32])
 

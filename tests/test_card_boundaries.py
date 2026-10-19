@@ -41,6 +41,7 @@ def evidence_frame(text='Arts', score=0.99, brightness=0, disabled=False):
 
         def isCardSealed(self):
             return [False] * 5
+        def getCardLayoutEvidence(self):return dict(complete=True,slots=[])
         getCardSelectionEvidence = env['getCardSelectionEvidence']
         isHouguReady = env['isHouguReady']
     f = Frame()
