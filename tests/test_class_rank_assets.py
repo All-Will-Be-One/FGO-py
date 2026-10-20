@@ -25,7 +25,7 @@ class ClassRankAssetsTest(unittest.TestCase):
         cls.Detector=env['Detector']
     def test_new_assets_keep_native_dimensions_and_alpha(self):
         for pair,image in zip(self.pairs,self.images):
-            if pair in ([0,3],[2,3]):
+            if pair in ([0,3],[2,3],[4,3]):
                 self.assertEqual(image.shape,(55,77,4))
                 self.assertTrue((image[:,:,3]==0).any());self.assertTrue((image[:,:,3]>0).any())
                 # All four native scales must fit every matching region.
@@ -44,7 +44,7 @@ class ClassRankAssetsTest(unittest.TestCase):
         for im in [np.zeros((720,1280,3),np.uint8),np.full((720,1280,3),255,np.uint8),np.random.default_rng(17).integers(0,256,(720,1280,3),dtype=np.uint8)]:
             d.im=im;self.assertIsNone(d.getFieldServantClassRank(0))
         for pair,image in zip(self.pairs,self.images):
-            if pair not in ([0,3],[2,3]):continue
+            if pair not in ([0,3],[2,3],[4,3]):continue
             d.im=np.zeros((720,1280,3),np.uint8)
             icon=self.cv2.resize(image[:,:,:3],None,fx=1.25,fy=1.25,interpolation=self.cv2.INTER_CUBIC)
             h,w=icon.shape[:2];d.im[623:623+h,16:16+w]=icon
